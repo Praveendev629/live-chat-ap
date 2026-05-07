@@ -1,8 +1,7 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
-  ActivityIndicator, RefreshControl, Alert, AppState,
+  ActivityIndicator, RefreshControl, Alert, AppState, Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
@@ -15,6 +14,8 @@ export default function StudentListScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [adminId, setAdminId] = useState(null);
+  const [actionModalVisible, setActionModalVisible] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
   const socketRef = useRef(null);
 
   const loadStudents = async () => {
@@ -23,7 +24,7 @@ export default function StudentListScreen({ navigation }) {
       setStudents(res.data);
     } catch(e) {
       console.error('Load students error:', e.message);
-      Alert.alert('Connection Error', `Could not connect to server.\n\nMake sure BACKEND_URL in config.js is set to:\n${BACKEND_URL}\n\nCheck your internet connection.`);
+      Alert.alert('Connection Error', `Could not connect to server.\n\nMake sure BACKEND_URL in config.js is set to:\n${BACKEND_URL}`);
     }
   };
 
@@ -51,9 +52,10 @@ export default function StudentListScreen({ navigation }) {
     socket.off('newMessage');
     socket.off('unreadUpdate');
     socket.off('userOnline');
+    socket.off('studentRemoved');
 
     socket.on('connect', () => {
-      console.log('✅ Socket connected:', socket.id);
+      console.log('Socket connected:', socket.id);
       socket.emit('join', aId);
     });
 
@@ -64,13 +66,12 @@ export default function StudentListScreen({ navigation }) {
     socket.on('newMessage', (msg) => {
       const senderId = msg.senderId?._id || msg.senderId;
       if (String(senderId) !== String(aId)) {
-        // New student message - update list
         setStudents(prev => prev.map(s => {
           if (String(s._id) === String(senderId)) {
             return {
               ...s,
               unreadCount: (s.unreadCount || 0) + 1,
-              lastMessage: msg.message || (msg.fileName ? `📎 ${msg.fileName}` : ''),
+              lastMessage: msg.message || (msg.fileName ? `File: ${msg.fileName}` : ''),
               lastMessageTime: msg.timestamp,
             };
           }
@@ -91,6 +92,10 @@ export default function StudentListScreen({ navigation }) {
       ));
     });
 
+    socket.on('studentRemoved', ({ studentId }) => {
+      setStudents(prev => prev.filter(s => String(s._id) !== String(studentId)));
+    });
+
     if (!socket.connected) socket.connect();
   };
 
@@ -107,6 +112,7 @@ export default function StudentListScreen({ navigation }) {
         socketRef.current.off('newMessage');
         socketRef.current.off('unreadUpdate');
         socketRef.current.off('userOnline');
+        socketRef.current.off('studentRemoved');
       }
     };
   }, []);
@@ -129,6 +135,81 @@ export default function StudentListScreen({ navigation }) {
     });
   };
 
+  const deleteStudent = async () => {
+    if (!selectedStudent) return;
+    
+    Alert.alert(
+      'Delete Student',
+      `Are you sure you want to delete ${selectedStudent.name}? This will permanently delete all their messages and cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const response = await axios.delete(`${BACKEND_URL}/api/student/${selectedStudent._id}`);
+              if (response.data.success) {
+                Alert.alert('Success', 'Student deleted successfully');
+                loadStudents();
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete student');
+            }
+          }
+        }
+      ]
+    );
+    setActionModalVisible(false);
+    setSelectedStudent(null);
+  };
+
+  const deleteChat = async () => {
+    if (!selectedStudent) return;
+    
+    Alert.alert(
+      'Delete Chat',
+      `Delete entire chat with ${selectedStudent.name}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete for Me',
+          onPress: async () => {
+            try {
+              await axios.delete(`${BACKEND_URL}/api/chat/${selectedStudent._id}`, {
+                data: { deleteType: 'forMe', requesterId: adminId }
+              });
+              loadStudents();
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete chat');
+            }
+          }
+        },
+        {
+          text: 'Delete for Everyone',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await axios.delete(`${BACKEND_URL}/api/chat/${selectedStudent._id}`, {
+                data: { deleteType: 'forEveryone', requesterId: adminId }
+              });
+              loadStudents();
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete chat');
+            }
+          }
+        }
+      ]
+    );
+    setActionModalVisible(false);
+    setSelectedStudent(null);
+  };
+
+  const showContextMenu = (student) => {
+    setSelectedStudent(student);
+    setActionModalVisible(true);
+  };
+
   const formatTime = (t) => {
     if (!t) return '';
     const d = new Date(t);
@@ -141,7 +222,13 @@ export default function StudentListScreen({ navigation }) {
   };
 
   const renderItem = ({ item }) => (
-    <TouchableOpacity style={styles.item} onPress={() => openChat(item)} activeOpacity={0.7}>
+    <TouchableOpacity 
+      style={styles.item} 
+      onPress={() => openChat(item)} 
+      onLongPress={() => showContextMenu(item)}
+      activeOpacity={0.7}
+      delayLongPress={500}
+    >
       <View style={styles.avatarWrap}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{item.name[0].toUpperCase()}</Text>
@@ -188,6 +275,27 @@ export default function StudentListScreen({ navigation }) {
         }
         ItemSeparatorComponent={() => <View style={styles.separator} />}
       />
+
+      <Modal
+        visible={actionModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setActionModalVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setActionModalVisible(false)}>
+          <View style={styles.modalContent}>
+            <TouchableOpacity style={styles.modalOption} onPress={deleteChat}>
+              <Text style={styles.modalOptionText}>Delete Chat</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalOption} onPress={deleteStudent}>
+              <Text style={[styles.modalOptionText, styles.dangerText]}>Delete Student</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setActionModalVisible(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -212,4 +320,11 @@ const styles = StyleSheet.create({
   badge: { backgroundColor:'#667eea', borderRadius:10, minWidth:20, height:20, alignItems:'center', justifyContent:'center', paddingHorizontal:6, marginLeft:8 },
   badgeText: { color:'#fff', fontSize:11, fontWeight:'700' },
   separator: { height:1, backgroundColor:'#f0f0f0', marginLeft:78 },
+  modalOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'flex-end' },
+  modalContent: { backgroundColor:'white', borderTopLeftRadius:20, borderTopRightRadius:20, padding:20 },
+  modalOption: { paddingVertical:15, borderBottomWidth:1, borderBottomColor:'#e0e0e0' },
+  modalOptionText: { fontSize:18, textAlign:'center' },
+  dangerText: { color:'#ff3b30' },
+  modalCancel: { paddingVertical:15, marginTop:10 },
+  modalCancelText: { fontSize:18, textAlign:'center', color:'#007aff', fontWeight:'600' },
 });

@@ -1,9 +1,8 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ActivityIndicator, Image,
-  Alert, Linking,
+  Alert, Linking, Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -19,6 +18,8 @@ export default function ChatScreen({ route, navigation }) {
   const [studentOnline, setStudentOnline] = useState(false);
   const [typing, setTyping] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [actionModalVisible, setActionModalVisible] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState(null);
   const flatRef = useRef(null);
   const typingTimer = useRef(null);
   const socketRef = useRef(null);
@@ -32,7 +33,6 @@ export default function ChatScreen({ route, navigation }) {
   useEffect(() => { scrollToBottom(); }, [messages]);
 
   useEffect(() => {
-    // Update header
     navigation.setOptions({
       title: studentName,
       headerRight: () => (
@@ -53,16 +53,16 @@ export default function ChatScreen({ route, navigation }) {
         socketRef.current.off('typing');
         socketRef.current.off('userOnline');
         socketRef.current.off('onlineUsers');
+        socketRef.current.off('messageDeleted');
       }
     };
   }, []);
 
   const loadMessages = async () => {
     try {
-      const res = await axios.get(`${BACKEND_URL}/api/messages/${studentId}`);
+      const res = await axios.get(`${BACKEND_URL}/api/messages/${studentId}?requesterId=${adminId}`);
       setMessages(res.data);
       setLoading(false);
-      // Mark as read
       socketRef.current?.emit('markRead', { studentId, adminId });
     } catch(e) {
       console.error('Load messages error:', e.message);
@@ -78,6 +78,7 @@ export default function ChatScreen({ route, navigation }) {
     socket.off('typing');
     socket.off('userOnline');
     socket.off('onlineUsers');
+    socket.off('messageDeleted');
 
     socket.on('connect', () => {
       socket.emit('join', adminId);
@@ -95,8 +96,17 @@ export default function ChatScreen({ route, navigation }) {
           if (prev.find(m => m._id === msg._id)) return prev;
           return [...prev, msg];
         });
-        // Mark read since we're in this chat
         socket.emit('markRead', { studentId, adminId });
+      }
+    });
+
+    socket.on('messageDeleted', ({ messageId, deleteType, message }) => {
+      if (deleteType === 'forEveryone') {
+        setMessages(prev => prev.map(msg => 
+          msg._id === messageId ? { ...msg, ...message, deletedForEveryone: true } : msg
+        ));
+      } else {
+        setMessages(prev => prev.filter(msg => msg._id !== messageId));
       }
     });
 
@@ -139,6 +149,50 @@ export default function ChatScreen({ route, navigation }) {
     typingTimer.current = setTimeout(() => {
       socket.emit('typing', { senderId: adminId, receiverId: studentId, typing: false });
     }, 2000);
+  };
+
+  const deleteMessage = async () => {
+    if (!selectedMessage) return;
+    
+    Alert.alert(
+      'Delete Message',
+      'Delete this message?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete for Me',
+          onPress: async () => {
+            try {
+              await axios.delete(`${BACKEND_URL}/api/message/${selectedMessage._id}`, {
+                data: { deleteType: 'forMe', requesterId: adminId }
+              });
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete message');
+            }
+          }
+        },
+        {
+          text: 'Delete for Everyone',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await axios.delete(`${BACKEND_URL}/api/message/${selectedMessage._id}`, {
+                data: { deleteType: 'forEveryone', requesterId: adminId }
+              });
+            } catch (error) {
+              Alert.alert('Error', 'Failed to delete message');
+            }
+          }
+        }
+      ]
+    );
+    setActionModalVisible(false);
+    setSelectedMessage(null);
+  };
+
+  const handleLongPress = (message) => {
+    setSelectedMessage(message);
+    setActionModalVisible(true);
   };
 
   const pickImage = async () => {
@@ -194,7 +248,7 @@ export default function ChatScreen({ route, navigation }) {
     );
     return (
       <TouchableOpacity onPress={() => Linking.openURL(msg.fileUrl)} style={styles.fileBubble}>
-        <Text style={styles.fileIcon}>{isVideo ? '🎥' : '📎'}</Text>
+        <Text style={styles.fileIcon}>📄</Text>
         <Text style={styles.fileName} numberOfLines={2}>{msg.fileName || 'Open File'}</Text>
       </TouchableOpacity>
     );
@@ -202,23 +256,40 @@ export default function ChatScreen({ route, navigation }) {
 
   const renderMessage = ({ item: msg }) => {
     const mine = isMe(msg);
-    return (
-      <View style={[styles.msgRow, mine ? styles.msgRowRight : styles.msgRowLeft]}>
-        {!mine && (
-          <View style={styles.msgAvatar}>
-            <Text style={{ color:'#fff', fontWeight:'700' }}>{studentName[0].toUpperCase()}</Text>
+    
+    if (msg.deletedForEveryone) {
+      return (
+        <View style={[styles.msgRow, mine ? styles.msgRowRight : styles.msgRowLeft]}>
+          <View style={[styles.bubble, styles.deletedBubble]}>
+            <Text style={styles.deletedText}>This message was deleted</Text>
           </View>
-        )}
-        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
-          {msg.fileUrl ? renderFileMessage(msg) : (
-            <Text style={[styles.msgText, mine && { color:'#fff' }]}>{msg.message}</Text>
-          )}
-          <Text style={[styles.msgTime, mine && { color:'rgba(255,255,255,0.7)' }]}>
-            {new Date(msg.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
-            {mine && <Text>  {msg.read ? '✓✓' : '✓'}</Text>}
-          </Text>
         </View>
-      </View>
+      );
+    }
+    
+    return (
+      <TouchableOpacity 
+        onLongPress={() => handleLongPress(msg)}
+        delayLongPress={500}
+        activeOpacity={0.7}
+      >
+        <View style={[styles.msgRow, mine ? styles.msgRowRight : styles.msgRowLeft]}>
+          {!mine && (
+            <View style={styles.msgAvatar}>
+              <Text style={{ color:'#fff', fontWeight:'700' }}>{studentName[0].toUpperCase()}</Text>
+            </View>
+          )}
+          <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
+            {msg.fileUrl ? renderFileMessage(msg) : (
+              <Text style={[styles.msgText, mine && { color:'#fff' }]}>{msg.message}</Text>
+            )}
+            <Text style={[styles.msgTime, mine && { color:'rgba(255,255,255,0.7)' }]}>
+              {new Date(msg.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
+              {mine && <Text>  {msg.read ? '✓✓' : '✓'}</Text>}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -259,7 +330,6 @@ export default function ChatScreen({ route, navigation }) {
         />
       )}
 
-      {/* Input Area */}
       <View style={styles.inputArea}>
         <TouchableOpacity style={styles.iconBtn} onPress={pickImage} disabled={uploading}>
           <Text style={styles.iconBtnText}>🖼️</Text>
@@ -284,6 +354,27 @@ export default function ChatScreen({ route, navigation }) {
           <Text style={styles.sendBtnText}>➤</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={actionModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setActionModalVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} onPress={() => setActionModalVisible(false)}>
+          <View style={styles.modalContent}>
+            <TouchableOpacity style={styles.modalOption} onPress={deleteMessage}>
+              <Text style={[styles.modalOptionText, styles.dangerText]}>Delete for Me</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalOption} onPress={deleteMessage}>
+              <Text style={[styles.modalOptionText, styles.dangerText]}>Delete for Everyone</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.modalCancel} onPress={() => setActionModalVisible(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -298,8 +389,10 @@ const styles = StyleSheet.create({
   bubble: { maxWidth:'75%', padding:10, borderRadius:16 },
   bubbleMine: { backgroundColor:'#667eea', borderBottomRightRadius:4 },
   bubbleOther: { backgroundColor:'#fff', borderBottomLeftRadius:4, shadowColor:'#000', shadowOpacity:0.08, shadowRadius:4, elevation:2 },
+  deletedBubble: { backgroundColor:'#e0e0e0', alignItems:'center' },
   msgText: { fontSize:14, color:'#1a1a2e', lineHeight:20 },
   msgTime: { fontSize:10, color:'#999', marginTop:4, textAlign:'right' },
+  deletedText: { fontSize:12, color:'#999', fontStyle:'italic' },
   fileBubble: { flexDirection:'row', alignItems:'center', gap:8, padding:4 },
   fileIcon: { fontSize:24 },
   fileName: { fontSize:13, color:'#667eea', textDecorationLine:'underline', flex:1 },
@@ -310,4 +403,11 @@ const styles = StyleSheet.create({
   sendBtn: { width:42, height:42, borderRadius:21, backgroundColor:'#667eea', alignItems:'center', justifyContent:'center', marginLeft:4 },
   sendBtnDisabled: { backgroundColor:'#ccc' },
   sendBtnText: { color:'#fff', fontSize:18 },
+  modalOverlay: { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'flex-end' },
+  modalContent: { backgroundColor:'white', borderTopLeftRadius:20, borderTopRightRadius:20, padding:20 },
+  modalOption: { paddingVertical:15, borderBottomWidth:1, borderBottomColor:'#e0e0e0' },
+  modalOptionText: { fontSize:18, textAlign:'center' },
+  dangerText: { color:'#ff3b30' },
+  modalCancel: { paddingVertical:15, marginTop:10 },
+  modalCancelText: { fontSize:18, textAlign:'center', color:'#007aff', fontWeight:'600' },
 });
