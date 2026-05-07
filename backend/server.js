@@ -94,6 +94,10 @@ function emitToUser(userId, event, data) {
 // ─── Helper to get full file URL ──────────────────────────────
 function getFullFileUrl(filename) {
   const baseUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
+<<<<<<< HEAD
+=======
+  // Remove trailing slash if present
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
   const cleanBaseUrl = baseUrl.replace(/\/$/, '');
   return `${cleanBaseUrl}/uploads/${filename}`;
 }
@@ -172,7 +176,11 @@ io.on('connection', (socket) => {
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', timestamp: new Date() }));
 
+<<<<<<< HEAD
 app.get('/', (req, res) => res.json({ status: 'Chat server running', time: new Date() }));
+=======
+app.get('/', (req, res) => res.json({ status: 'Chat server running 🚀', time: new Date() }));
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
 
 // Get or create admin
 app.get('/api/admin', async (req, res) => {
@@ -212,8 +220,13 @@ app.get('/api/students', async (req, res) => {
         unreadCount,
         lastMessage: lastMsg
           ? lastMsg.deletedForEveryone
+<<<<<<< HEAD
             ? 'Message deleted'
             : lastMsg.message || (lastMsg.fileName ? `File: ${lastMsg.fileName}` : '')
+=======
+            ? '🚫 Message deleted'
+            : lastMsg.message || (lastMsg.fileName ? `📎 ${lastMsg.fileName}` : '')
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
           : '',
         lastMessageTime: lastMsg ? lastMsg.timestamp : s.createdAt,
       };
@@ -253,12 +266,19 @@ app.get('/api/messages/:userId', async (req, res) => {
   } catch(e){ res.status(500).json({ error: e.message }); }
 });
 
-// Upload file
+// Upload file - FIXED VERSION
 app.post('/api/upload', upload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     
+<<<<<<< HEAD
     const filename = req.file.filename;
+=======
+    // Get the filename
+    const filename = req.file.filename;
+    
+    // Create full URL using helper function
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
     const fileUrl = getFullFileUrl(filename);
     
     console.log('File uploaded:', {
@@ -380,18 +400,33 @@ app.delete('/api/chat/:studentId', async (req, res) => {
   } catch(e){ res.status(500).json({ error: e.message }); }
 });
 
+<<<<<<< HEAD
 // Delete student entirely
+=======
+// Delete student entirely - FIXED VERSION
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
 app.delete('/api/student/:studentId', async (req, res) => {
   try {
     const { studentId } = req.params;
     const admin = await getAdmin();
 
+<<<<<<< HEAD
+=======
+    // First check if student exists
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
     const student = await User.findById(studentId);
     if (!student) {
       return res.status(404).json({ error: 'Student not found' });
     }
 
+<<<<<<< HEAD
     await User.findByIdAndDelete(studentId);
+=======
+    // Delete the student user
+    await User.findByIdAndDelete(studentId);
+
+    // Delete ALL their messages permanently
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
     await Message.deleteMany({
       $or: [
         { senderId: studentId },
@@ -399,7 +434,14 @@ app.delete('/api/student/:studentId', async (req, res) => {
       ]
     });
 
+<<<<<<< HEAD
     emitToUser(studentId, 'studentDeleted', { message: 'Your account has been removed.' });
+=======
+    // If student is online, force disconnect them
+    emitToUser(studentId, 'studentDeleted', { message: 'Your account has been removed.' });
+
+    // Notify admin list to refresh
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
     emitToUser(admin._id, 'studentRemoved', { studentId });
 
     console.log(`Student ${student.name} (${studentId}) deleted successfully`);
@@ -410,5 +452,9 @@ app.delete('/api/student/:studentId', async (req, res) => {
   }
 });
 
+<<<<<<< HEAD
+=======
+// ─── Start ────────────────────────────────────────────────────
+>>>>>>> 0c02fa80f594a5a28ef0eba8bbfbc021688f4b96
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
