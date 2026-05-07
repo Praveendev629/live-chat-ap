@@ -1,0 +1,2 @@
+Place a short notification.mp3 here for message sounds.
+Free sounds: https://mixkit.co/free-sound-effects/notification/
